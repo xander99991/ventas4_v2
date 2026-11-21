@@ -106,15 +106,13 @@ def bootstrap(m, base, reps, semilla=2026):
 # ---------------------------------------------------------------------------
 # Barra lateral
 # ---------------------------------------------------------------------------
+META = 4.0      # crecimiento a validar (%)
+REPS = 2000     # réplicas bootstrap
+
 with st.sidebar:
     st.markdown("### 📈 ¿Crecimos 4 %?")
     pagina = st.radio("Sección", ["🏠 Pregunta y método", "💵 1. Ventas en dinero",
-                                  "📦 2. Unidades vendidas", "✅ Veredicto"], label_visibility="collapsed")
-    st.divider()
-    st.markdown("**Parámetros del contraste**")
-    META = st.number_input("Crecimiento a validar (%)", value=4.0, step=0.5, format="%.1f")
-    REPS = st.select_slider("Réplicas bootstrap", options=[500, 1000, 2000, 5000], value=2000)
-    st.caption("Cambia la meta para ver cómo se mueve el veredicto.")
+                                  "📦 2. Unidades vendidas"], label_visibility="collapsed")
     st.divider()
     st.caption(f"Base: `ventas_mensuales.csv` · {len(df):,} filas · "
                f"{df['sucursal'].nunique()} sucursales · {df['producto'].nunique()} productos · "
@@ -280,10 +278,10 @@ La pregunta parece tener una sola respuesta, pero **"crecimiento" no es un núme
 | 1 | Crecimiento total y mes a mes (YoY) | Punto de partida y volatilidad |
 | 2 | Descomposición por **tipo de sucursal** (aditiva, en p.p.) | Separar **expansión** de crecimiento **orgánico** |
 | 3 | **Like-for-like (LFL)**: solo tiendas abiertas los 24 meses, con y sin **P10** | Estándar del retail; aísla el producto retirado en jul-2025 |
-| 4 | **Bootstrap por conglomerados** (sucursal) e IC 95 % | Contrastar formalmente *H₀: g = meta* |
+| 4 | **Bootstrap por conglomerados** (sucursal) e IC 95 % | Contrastar formalmente *H₀: g = 4 %* |
 | 5 | Mecanismo: volumen–mezcla–descuento / unidades × precio medio | Entender **por qué** crece |
 """)
-    caja("Usa el menú lateral para avanzar. Puedes cambiar la <b>meta</b> (4 % por defecto) y todo el análisis se recalcula.")
+    caja("Usa el menú lateral para avanzar entre las dos secciones.")
 
 # ---------------------------------------------------------------------------
 # PÁGINA 1: Ventas
@@ -351,7 +349,7 @@ elif pagina.startswith("💵"):
 # ---------------------------------------------------------------------------
 # PÁGINA 2: Unidades
 # ---------------------------------------------------------------------------
-elif pagina.startswith("📦"):
+else:
     st.markdown('<div class="etiqueta">Sección 2</div>', unsafe_allow_html=True)
     st.title("📦 Unidades vendidas")
     gt = kpis("cantidad", "u")
@@ -359,8 +357,8 @@ elif pagina.startswith("📦"):
 
     with tabs[0]:
         yoy = grafico_mensual("cantidad", "Unidades")
-        caja(f"En volumen físico la empresa creció <b>{gt:.1f} %</b>: este es el número que más se acerca al "
-             f"{META:.0f} % para la empresa completa. Igual que en dinero, el mes a mes es volátil "
+        caja(f"En volumen físico la empresa creció <b>{gt:.1f} %</b> ({gt - META:+.1f} p.p. frente a la meta de "
+             f"{META:.1f} %). Igual que en dinero, el mes a mes es volátil "
              f"(de {yoy.min():+.0f} % a {yoy.max():+.0f} %).")
 
     with tabs[1]:
@@ -409,73 +407,3 @@ elif pagina.startswith("📦"):
         caja(f"El precio <i>de lista</i> no cambió, pero el precio <b>medio</b> subió {gP*100:.1f} % por "
              "<b>efecto mezcla</b> (más unidades de productos caros). Por eso la empresa crece "
              f"<b>{gQ*100:.1f} % en unidades</b> y <b>{gV*100:.1f} % en dinero</b>.")
-
-# ---------------------------------------------------------------------------
-# PÁGINA 3: Veredicto
-# ---------------------------------------------------------------------------
-else:
-    st.markdown('<div class="etiqueta">Conclusión</div>', unsafe_allow_html=True)
-    st.title(f"✅ Veredicto: ¿se valida el {META:.1f} %?")
-
-    filas = []
-    for m, nombre in [("ventas", "Ventas ($)"), ("cantidad", "Unidades")]:
-        for base, etiqueta in [("total", "Total empresa"), ("lfl", "LFL (126 estables)")]:
-            sim = bootstrap(m, base, REPS)
-            lo, hi = np.percentile(sim, [2.5, 97.5])
-            est = g(df if base == "total" else EST, m)
-            filas.append({"Métrica": nombre, "Base": etiqueta, "Crecimiento %": est,
-                          "IC 95 % inf.": lo, "IC 95 % sup.": hi,
-                          f"¿Compatible con {META:.1f} %?": "✅ sí" if lo <= META <= hi else "❌ no"})
-        filas.append({"Métrica": nombre, "Base": "LFL sin P10",
-                      "Crecimiento %": g(EST[EST.producto != "P10"], m),
-                      "IC 95 % inf.": np.nan, "IC 95 % sup.": np.nan, f"¿Compatible con {META:.1f} %?": "—"})
-    res = pd.DataFrame(filas)
-    for c in ["Crecimiento %", "IC 95 % inf.", "IC 95 % sup."]:
-        res[c] = res[c].astype(float)
-    vista = res.copy()
-    for c in ["Crecimiento %", "IC 95 % inf.", "IC 95 % sup."]:
-        vista[c] = vista[c].map(lambda x: "" if pd.isna(x) else f"{x:+.2f}")
-    st.dataframe(vista, width="stretch", hide_index=True)
-
-    fig = go.Figure()
-    for i, r in res.dropna().iterrows():
-        y = f"{r['Métrica']} · {r['Base']}"
-        fig.add_scatter(x=[r["IC 95 % inf."], r["IC 95 % sup."]], y=[y, y], mode="lines",
-                        line=dict(color=AZUL if r["Métrica"] == "Ventas ($)" else NARANJA, width=6),
-                        showlegend=False, hoverinfo="skip")
-        fig.add_scatter(x=[r["Crecimiento %"]], y=[y], mode="markers", marker=dict(size=12, color="black"),
-                        showlegend=False, hovertemplate=f"{y}<br>%{{x:.2f}} %<extra></extra>")
-    fig.add_vline(x=META, line_dash="dash", line_color=VIOLETA, annotation_text=f"meta {META:.1f} %")
-    st.plotly_chart(estilo(fig, 300, "Estimación puntual e IC 95 % (bootstrap por sucursal)", False)
-                    .update_xaxes(title="crecimiento %"), width="stretch")
-
-    gv, gq = g(df, "ventas"), g(df, "cantidad")
-    comp = {(r["Métrica"], r["Base"]): r[f"¿Compatible con {META:.1f} %?"] for _, r in res.iterrows()}
-    rechaza = [f"{k[0]} · {k[1]}" for k, v in comp.items() if v.startswith("❌")]
-    st.markdown(f"""
-<div class="veredicto">
-<div class="etiqueta">Respuesta</div>
-<h3>Puntualmente, el {META:.1f} % es el crecimiento en <u>unidades</u>; en dinero fue {gv:.1f} %.</h3>
-<ul>
-<li><b>Unidades:</b> la empresa vendió <b>{gq:.1f} %</b> más unidades.</li>
-<li><b>Dinero:</b> las ventas crecieron <b>{gv:.1f} %</b>, porque el precio medio subió por efecto mezcla
-    (1 + g<sub>V</sub>) = (1 + g<sub>Q</sub>)(1 + g<sub>P̄</sub>).</li>
-<li><b>Con incertidumbre:</b> la heterogeneidad entre sucursales es grande, así que la meta cae dentro del IC 95 %
-    de ambos totales: <b>no se puede rechazar {META:.1f} %</b> ni en dinero ni en unidades.
-    {"Sí se rechaza en: <b>" + ", ".join(rechaza) + "</b>." if rechaza else "No se rechaza en ninguna medida."}</li>
-<li><b>El crecimiento es de expansión:</b> a tiendas iguales las unidades casi no crecen
-    ({g(EST, 'cantidad'):+.1f} %) y el dinero crece {g(EST, 'ventas'):+.1f} %. Sin el producto retirado P10, ambos
-    LFL rondan el 3.5 %.</li>
-</ul>
-</div>
-""", unsafe_allow_html=True)
-
-    st.subheader("Limitaciones")
-    st.markdown("""
-- **Dos años de datos:** no permiten separar tendencia de ciclo; el contraste mide incertidumbre entre sucursales, no entre años.
-- El total de la empresa es un **censo**: el IC del total se interpreta como robustez frente a la composición de tiendas, no como error muestral clásico.
-- Las aperturas no son aleatorias (selección de ubicaciones), así que el LFL no es un efecto causal de "ser tienda madura".
-- P10 se trata como evento puntual; su retiro pudo desplazar demanda hacia otros productos (canibalización inversa).
-""")
-    caja("<b>Lección:</b> “crecimos X %” no significa nada sin decir <b>qué</b> se mide, <b>sobre qué base</b> y "
-         "<b>cómo</b> se agrega. Aquí: +4 % en unidades, +6 % en dinero y ~+2 % orgánico.")
