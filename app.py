@@ -92,22 +92,10 @@ def g(d, m):
     return (v.get(2025, 0) / v.get(2024, np.nan) - 1) * 100
 
 
-@st.cache_data
-def bootstrap(m, base, reps, semilla=2026):
-    """Bootstrap por conglomerados (sucursal): re-muestrea tiendas con reemplazo."""
-    d = df if base == "total" else EST
-    s = d.groupby(["sucursal", "anio"])[m].sum().unstack("anio").fillna(0)
-    a, b = s[2024].to_numpy(), s[2025].to_numpy()
-    rng = np.random.default_rng(semilla)
-    idx = rng.integers(0, len(a), size=(reps, len(a)))
-    return (b[idx].sum(1) / a[idx].sum(1) - 1) * 100
-
-
 # ---------------------------------------------------------------------------
 # Barra lateral
 # ---------------------------------------------------------------------------
 META = 4.0      # crecimiento a validar (%)
-REPS = 2000     # réplicas bootstrap
 
 with st.sidebar:
     st.markdown("### 📈 ¿Crecimos 4 %?")
@@ -206,42 +194,6 @@ def bloque_lfl(m):
     return t
 
 
-def bloque_inferencia(m, etiqueta):
-    st.markdown(f"""
-**¿El crecimiento de {etiqueta.lower()} es *significativamente* distinto de {META:.1f} %?**
-El total de la empresa es un dato censal, pero si pensamos que cada sucursal es una realización de
-un proceso generador (con shocks propios), podemos medir la **incertidumbre** del crecimiento con un
-**bootstrap por conglomerados**: re-muestreamos *sucursales* con reemplazo {REPS:,} veces y recalculamos
-la tasa como cociente de sumas.
-""")
-    st.latex(r"H_0:\; g = %.1f\%% \qquad H_1:\; g \neq %.1f\%%" % (META, META))
-
-    res = {}
-    cols = st.columns(2)
-    for col, (base, nombre, color) in zip(cols, [("total", "Total empresa", AZUL), ("lfl", "Like-for-like (126 estables)", NARANJA)]):
-        sim = bootstrap(m, base, REPS)
-        lo, hi = np.percentile(sim, [2.5, 97.5])
-        est = g(df if base == "total" else EST, m)
-        pval = min(1.0, 2 * min((sim <= META).mean(), (sim >= META).mean()))
-        res[nombre] = dict(est=est, lo=lo, hi=hi, p=pval)
-        fig = go.Figure(go.Histogram(x=sim, nbinsx=50, marker_color=color, opacity=.85,
-                                     hovertemplate="%{x:.2f} %: %{y} réplicas<extra></extra>"))
-        fig.add_vrect(x0=lo, x1=hi, fillcolor=color, opacity=.08, line_width=0)
-        fig.add_vline(x=META, line_dash="dash", line_color=VIOLETA, line_width=2,
-                      annotation_text=f"H₀ = {META:.1f} %", annotation_position="top left")
-        fig.add_vline(x=est, line_color="black", line_width=1.5,
-                      annotation_text=f"observado {est:.2f} %", annotation_position="top right")
-        col.plotly_chart(estilo(fig, 330, nombre, False).update_xaxes(title="crecimiento %"),
-                         width="stretch")
-        dentro = lo <= META <= hi
-        col.markdown(f"IC 95 %: **[{lo:.2f} %, {hi:.2f} %]** · p ≈ **{pval:.3f}**  \n"
-                     + ("✅ No se rechaza H₀: el dato es compatible con la meta."
-                        if dentro else "❌ Se rechaza H₀ al 5 %: la meta queda fuera del intervalo."))
-    caja("El bootstrap por <b>sucursal</b> respeta que las ventas de una misma tienda están correlacionadas "
-         "entre meses y productos; re-muestrear filas sueltas subestimaría la varianza (error estándar demasiado pequeño).")
-    return res
-
-
 # ---------------------------------------------------------------------------
 # PÁGINA 0: Pregunta y método
 # ---------------------------------------------------------------------------
@@ -278,8 +230,7 @@ La pregunta parece tener una sola respuesta, pero **"crecimiento" no es un núme
 | 1 | Crecimiento total y mes a mes (YoY) | Punto de partida y volatilidad |
 | 2 | Descomposición por **tipo de sucursal** (aditiva, en p.p.) | Separar **expansión** de crecimiento **orgánico** |
 | 3 | **Like-for-like (LFL)**: solo tiendas abiertas los 24 meses, con y sin **P10** | Estándar del retail; aísla el producto retirado en jul-2025 |
-| 4 | **Bootstrap por conglomerados** (sucursal) e IC 95 % | Contrastar formalmente *H₀: g = 4 %* |
-| 5 | Mecanismo: volumen–mezcla–descuento / unidades × precio medio | Entender **por qué** crece |
+| 4 | Mecanismo: volumen–mezcla–descuento / unidades × precio medio | Entender **por qué** crece |
 """)
     caja("Usa el menú lateral para avanzar entre las dos secciones.")
 
@@ -290,7 +241,7 @@ elif pagina.startswith("💵"):
     st.markdown('<div class="etiqueta">Sección 1</div>', unsafe_allow_html=True)
     st.title("💵 Ventas en dinero")
     gt = kpis("ventas", "$")
-    tabs = st.tabs(["1 · Panorama", "2 · ¿De dónde viene?", "3 · Tiendas iguales", "4 · Inferencia", "5 · Mecanismo"])
+    tabs = st.tabs(["1 · Panorama", "2 · ¿De dónde viene?", "3 · Tiendas iguales", "4 · Mecanismo"])
 
     with tabs[0]:
         yoy = grafico_mensual("ventas", "Ventas ($)")
@@ -316,9 +267,6 @@ elif pagina.startswith("💵"):
              f"{t.loc['LFL Region_A', 'con P10']:+.1f} % (P10 solo se vendía en A).")
 
     with tabs[3]:
-        bloque_inferencia("ventas", "Ventas en dinero")
-
-    with tabs[4]:
         st.markdown("Como el **precio de lista de cada producto no cambió**, el crecimiento LFL se reparte en tres efectos:")
         st.latex(r"\Delta V = \underbrace{V_{24}\left(\tfrac{Q_{25}}{Q_{24}}-1\right)}_{\text{volumen}}"
                  r"+\underbrace{\left(\textstyle\sum_p q_{p,25}\,\bar p_{p,24}-V_{24}-\text{vol}\right)}_{\text{mezcla}}"
@@ -353,7 +301,7 @@ else:
     st.markdown('<div class="etiqueta">Sección 2</div>', unsafe_allow_html=True)
     st.title("📦 Unidades vendidas")
     gt = kpis("cantidad", "u")
-    tabs = st.tabs(["1 · Panorama", "2 · ¿De dónde viene?", "3 · Tiendas iguales", "4 · Inferencia", "5 · Dinero = unidades × precio"])
+    tabs = st.tabs(["1 · Panorama", "2 · ¿De dónde viene?", "3 · Tiendas iguales", "4 · Dinero = unidades × precio"])
 
     with tabs[0]:
         yoy = grafico_mensual("cantidad", "Unidades")
@@ -380,9 +328,6 @@ else:
                         width="stretch")
 
     with tabs[3]:
-        bloque_inferencia("cantidad", "Unidades vendidas")
-
-    with tabs[4]:
         st.markdown("Las ventas en dinero son unidades por el precio neto promedio por unidad, así que los "
                     "crecimientos se **multiplican**:")
         st.latex(r"V = Q\cdot\bar P \quad\Rightarrow\quad (1+g_V) = (1+g_Q)(1+g_{\bar P})")
